@@ -24,7 +24,7 @@ def setup_logging(log_file: str = "errors.log"):
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(log_file),
+            logging.FileHandler(log_file, mode='w'),  # 'w' mode overwrites instead of append
             logging.StreamHandler(sys.stdout)
         ]
     )
@@ -32,7 +32,7 @@ def setup_logging(log_file: str = "errors.log"):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Papyrus header files from source scripts")
-    parser.add_argument("--data-dir", default="Data",
+    parser.add_argument("--base-dir", default="Data",
                        help="Directory containing the Data folder structure (default: Data)")
     parser.add_argument("--output-dir", default="Headers",
                        help="Output directory for header files (default: Headers)")
@@ -40,6 +40,8 @@ def main():
                        help="Pattern for .pex files to process (default: *.pex)")
     parser.add_argument("--missing-log", default="missing_source.txt",
                        help="File to log missing source files (default: missing_source.txt)")
+    parser.add_argument("--enable-bsa", action="store_true", default=False,
+                       help="Enable BSA archive scanning (may be slow with many BSA files)")
     parser.add_argument("--verbose", "-v", action="store_true",
                        help="Enable verbose logging")
 
@@ -47,15 +49,15 @@ def main():
 
     # Normalize data directory path - handle both with and without trailing slash
     # Also strip any surrounding quotes that might be included from command line
-    data_dir_str = args.data_dir.strip('"').strip("'")
-    data_dir = Path(data_dir_str)
+    base_dir_str = args.base_dir.strip('"').strip("'")
+    base_dir = Path(base_dir_str)
 
     # If the path ends with "Data" or points to a Data subdirectory, use it directly
     # Otherwise, assume it's the parent directory and append "Data"
-    if data_dir.name.lower() == "data":
-        scripts_dir = data_dir / "Scripts"
+    if base_dir.name.lower() == "data":
+        scripts_dir = base_dir / "Scripts"
     else:
-        scripts_dir = data_dir / "Data" / "Scripts"
+        scripts_dir = base_dir / "Data" / "Scripts"
 
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -63,14 +65,15 @@ def main():
     setup_logging()
 
     logging.info("Starting Papyrus Header Generator")
-    logging.info(f"Data directory: {data_dir}")
+    logging.info(f"Base directory: {base_dir}")
     logging.info(f"Scripts directory: {scripts_dir}")
     logging.info(f"Output directory: {args.output_dir}")
     logging.info(f"Pattern: {args.pattern}")
+    logging.info(f"BSA support: {'enabled' if args.enable_bsa else 'disabled'}")
 
     try:
         # Initialize components
-        scanner = FileScanner(str(scripts_dir))
+        scanner = FileScanner(str(scripts_dir), enable_bsa=args.enable_bsa)
         parser_instance = PapyrusParser()
         generator = HeaderGenerator(args.output_dir)
 

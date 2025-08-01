@@ -4,3 +4,5 @@
 /Headers
 missing_source.txt
 /examples
+**/__pycache__
+

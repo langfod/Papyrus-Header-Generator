@@ -47,7 +47,7 @@ class PapyrusParser:
     def __init__(self):
         # Regex patterns for parsing
         self.script_pattern = re.compile(
-            r'^\s*Scriptname\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+(Hidden))?\s*$',
+            r'^\s*Scriptname\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+(Hidden|Conditional))?\s*$',
             re.IGNORECASE | re.MULTILINE
         )
 
