@@ -1,0 +1,86 @@
+
+main goal: search for compiled papyrus scripts (.pex files) (Data\Scripts) and Construct header files from their Papyrus source files ( .psc) found in and under a "Data\Scripts folder"
+
+-----
+An Example of the Actor.psc header file:
+(found in examples\Headers\actor.psc
+
+```
+ScriptName Actor extends ObjectReference
+
+Function EquipItem(Form akItem, bool abPreventRemoval = false, bool abSilent = false) native
+```
+
+By analyzing this header file, the compiler learns about the existence of the Actor object, its inheritance from ObjectReference, and the presence of the EquipItem function with the corresponding arguments (some of which have default values). The native flag allows skipping the writing of the function body in the header file, as these scripts are used only for analysis. This significantly speeds up compilation.
+
+-----
+- header files will be written into the "Headers" folder
+- test data can be found in the local directory "Data".
+- read in a list of all compiled Papyrus scripts ( files end in .pex ); these should all be in Data\Scripts
+- find a matching source files ( files end in .psc )
+- source files may be in odd locations (Data\Source, Data\Scripts\Source, Data\Scripts\Souce, Data\Scripts\*.psc )
+- filenames should be matched case-insensitive
+- allow for glob searching of script filenames as the user may wish to edit the script and only look for "DOM_*.pex" for example)
+- if no matching source file for a script file can be found anywhere then write those to a missing_source.txt file
+- non-matching files might be best kept in a runtime list and then dumped at the end. (to prepare for a future step)
+- that future phase would use Champollion.exe to decompile pex files into psc files.
+
+- there exists another possible location for scripts and source files. these are in BSA archive files. (Data\*.bsa)
+- bsa archive files may contain other types of files but we only care about .pex and .psc files)
+- if a file exists in a bsa archive and also as a "loose" file in a source folder then the "loose" file takes precedence.
+- the python bethesda_structs module can be used to examine bsa archive files.
+- bsa searching can be done in another phase after the main parts are done but knowing this may help with how to structure the base code.
+
+-------
+notes on using bethesda_structs for examining and extracting for bsa archive file ( .bsa extension)
+
+
+>>> from bethesda_structs.archive import BSAArchive
+>>> BSAArchive.can_handle('/media/sf_VMShared/bsa/Campfire.bsa')
+True
+
+
+>>> from bethesda_structs.archive import BSAArchive
+>>> archive = BSAArchive.parse_file('/media/sf_VMShared/bsa/Campfire.bsa')
+>>> print(archive.container.directory_records)
+ListContainer:
+    Container:
+        hash = 1948419268744733541
+        file_count = 155
+        name_offset = 14971
+    Container:
+        hash = 2736503539341685349
+        file_count = 174
+        name_offset = 17467
+    Container:
+        hash = 3940292978845119603
+        file_count = 163
+        name_offset = 20268
+    Container:
+        hash = 11606842737777340531
+        file_count = 1
+        name_offset = 22885
+>>> print(archive.container.directory_blocks[3])  # contains 1 file
+Container:
+    name = u'meshes\\mps\x00' (total 11)
+    file_records = ListContainer:
+        Container:
+            hash = 16183754957220078963l
+            size = 2384
+            offset = 25094933
+>>> print(archive.container.file_names[:5])
+['_camp_objectplacementindicatorthread01.psc', '_camp_objectplacementindicatorthread02.psc', '_camp_objectplacementindicatorthread03.psc', '_camp_tentsitlayscript.psc', 'campcampfire.psc']
+
+
+>>> from bethesda_structs.archive import BSAArchive
+>>> archive = BSAArchive.parse_file('/media/sf_VMShared/bsa/Campfire.bsa')
+>>> archive.extract('/home/stephen-bunn/Downloads/campfire-extracted/')
+>>> from pathlib import Path
+>>> for path in pathlib.Path('/home/stephen-bunn/Downloads/campfire-extracted/').glob('**/*'):
+...    print(path.as_posix())
+/home/stephen-bunn/Downloads/campfire-extracted/scripts/_camp_indicatortrigger.pexl
+/home/stephen-bunn/Downloads/campfire-extracted/scripts/_camp_objectplacementthread30.pex
+/home/stephen-bunn/Downloads/campfire-extracted/scripts/campconjuredshelter.pex
+/home/stephen-bunn/Downloads/campfire-extracted/scripts/_camp_objectplacementindicatorthread02.pex
+
+

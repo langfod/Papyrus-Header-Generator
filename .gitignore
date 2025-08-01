@@ -1,0 +1,6 @@
+/.idea
+/Data
+*.log
+/Headers
+missing_source.txt
+/examples
