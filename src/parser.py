@@ -20,6 +20,7 @@ class FunctionSignature:
     parameters: List[str]
     is_native: bool
     is_event: bool = False
+    flags: str = ""  # Store complete flags like "native global"
 
 
 @dataclass
@@ -45,13 +46,11 @@ class PapyrusParser:
     """Parses Papyrus source files to extract signatures."""
 
     def __init__(self):
-        # Regex patterns for parsing
         self.script_pattern = re.compile(
             r'^\s*Scriptname\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+(Hidden|Conditional))?\s*$',
             re.IGNORECASE | re.MULTILINE
         )
 
-        # Updated function pattern to handle multiline declarations better
         self.function_pattern = re.compile(
             r'^\s*(?:(\w+)\s+)?Function\s+(\w+)\s*\([^)]*\)(?:\s+(native))?\s*$',
             re.IGNORECASE | re.MULTILINE
@@ -75,23 +74,18 @@ class PapyrusParser:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
         except UnicodeDecodeError:
-            # Try with different encoding if UTF-8 fails
             with open(file_path, 'r', encoding='latin1') as f:
                 content = f.read()
 
         # Clean up content - remove comments and normalize whitespace
         content = self._preprocess_content(content)
 
-        # Parse script declaration
         script_name, extends, flags = self._parse_script_declaration(content)
 
-        # Parse functions
         functions = self._parse_functions(content)
 
-        # Parse events
-        events = self._parse_events(content)
+        events = []
 
-        # Parse properties
         properties = self._parse_properties(content)
 
         return ParsedScript(
@@ -104,10 +98,11 @@ class PapyrusParser:
         )
 
     def _preprocess_content(self, content: str) -> str:
-        """Preprocess content to handle comments and normalize formatting."""
+        """Preprocess content to handle comments, normalize formatting, and join line continuations."""
         lines = []
         in_block_comment = False
 
+        # Remove comments
         for line in content.split('\n'):
             # Handle block comments
             if ';/' in line:
@@ -118,15 +113,26 @@ class PapyrusParser:
             if in_block_comment:
                 continue
 
-            # Remove line comments
             if ';' in line:
                 line = line[:line.index(';')]
 
-            # Keep the line if it has content
             if line.strip():
                 lines.append(line)
 
-        return '\n'.join(lines)
+        # Join lines with backslash continuation
+        joined_lines = []
+        buffer = ""
+        for line in lines:
+            if line.rstrip().endswith("\\"):
+                buffer += line.rstrip()[:-1] + " "  # Remove backslash, add space
+            else:
+                buffer += line
+                joined_lines.append(buffer)
+                buffer = ""
+        if buffer:
+            joined_lines.append(buffer)
+
+        return '\n'.join(joined_lines)
 
     def _parse_script_declaration(self, content: str) -> tuple[str, Optional[str], List[str]]:
         """Parse the Scriptname declaration."""
@@ -145,7 +151,6 @@ class PapyrusParser:
         """Parse function declarations using a more robust approach."""
         functions = []
 
-        # Split content into lines for line-by-line processing
         lines = content.split('\n')
         i = 0
 
@@ -154,19 +159,16 @@ class PapyrusParser:
 
             # Look for function declarations
             if re.match(r'^\s*(?:\w+\s+)?Function\s+\w+', line, re.IGNORECASE):
-                # Extract the complete function declaration (may span multiple lines)
                 func_declaration = line
 
-                # Check if the function declaration continues on next lines
                 while i + 1 < len(lines) and not re.search(r'\)', func_declaration):
                     i += 1
                     func_declaration += ' ' + lines[i].strip()
 
-                # Parse the function declaration
                 func_data = self._parse_single_function(func_declaration)
-                if func_data:
+                if func_data and func_data.is_native:
                     functions.append(func_data)
-                    logging.debug(f"Function: {func_data.return_type or 'void'} {func_data.name}({', '.join(func_data.parameters)}) {'native' if func_data.is_native else ''}")
+                    logging.debug(f"Function: {func_data.return_type or 'void'} {func_data.name}({', '.join(func_data.parameters)}) native")
 
             i += 1
 
@@ -175,7 +177,7 @@ class PapyrusParser:
     def _parse_single_function(self, declaration: str) -> Optional[FunctionSignature]:
         """Parse a single function declaration."""
         # Pattern to match function declaration
-        pattern = r'^\s*(?:(\w+)\s+)?Function\s+(\w+)\s*\((.*?)\)(?:\s+(native))?\s*$'
+        pattern = r'^\s*(?:(\w+)\s+)?Function\s+(\w+)\s*\((.*?)\)(?:\s+([\w\s]+))?\s*$'
         match = re.match(pattern, declaration, re.IGNORECASE | re.DOTALL)
 
         if not match:
@@ -184,7 +186,9 @@ class PapyrusParser:
         return_type = match.group(1)
         name = match.group(2)
         params_str = match.group(3)
-        is_native = match.group(4) is not None
+        flags_str = match.group(4) or ""
+
+        is_native = "native" in flags_str.lower()
 
         parameters = self._parse_parameters(params_str) if params_str.strip() else []
 
@@ -192,14 +196,14 @@ class PapyrusParser:
             name=name,
             return_type=return_type,
             parameters=parameters,
-            is_native=is_native
+            is_native=is_native,
+            flags=flags_str.strip()  # Store the complete flags string
         )
 
     def _parse_events(self, content: str) -> List[FunctionSignature]:
         """Parse event declarations using a more robust approach."""
         events = []
 
-        # Split content into lines for line-by-line processing
         lines = content.split('\n')
         i = 0
 
@@ -208,7 +212,6 @@ class PapyrusParser:
 
             # Look for event declarations
             if re.match(r'^\s*Event\s+\w+', line, re.IGNORECASE):
-                # Extract the complete event declaration (may span multiple lines)
                 event_declaration = line
 
                 # Check if the event declaration continues on next lines
@@ -216,7 +219,6 @@ class PapyrusParser:
                     i += 1
                     event_declaration += ' ' + lines[i].strip()
 
-                # Parse the event declaration
                 event_data = self._parse_single_event(event_declaration)
                 if event_data:
                     events.append(event_data)
@@ -228,7 +230,6 @@ class PapyrusParser:
 
     def _parse_single_event(self, declaration: str) -> Optional[FunctionSignature]:
         """Parse a single event declaration."""
-        # Pattern to match event declaration
         pattern = r'^\s*Event\s+(\w+)\s*\((.*?)\)\s*$'
         match = re.match(pattern, declaration, re.IGNORECASE | re.DOTALL)
 
@@ -249,7 +250,7 @@ class PapyrusParser:
         )
 
     def _parse_properties(self, content: str) -> List[PropertySignature]:
-        """Parse property declarations."""
+        """Parse property declarations - only include Auto properties and GlobalVariable properties."""
         properties = []
 
         for match in self.property_pattern.finditer(content):
@@ -257,13 +258,20 @@ class PapyrusParser:
             name = match.group(2)
             flags = [match.group(3)] if match.group(3) else []
 
-            properties.append(PropertySignature(
-                name=name,
-                type_name=type_name,
-                flags=flags
-            ))
+            # Only include properties that are:
+            # 1. GlobalVariable type, OR
+            # 2. Have Auto/AutoReadOnly flags
+            is_global_variable = type_name.lower() == "globalvariable"
+            has_auto_flag = any(flag and ("auto" in flag.lower()) for flag in flags)
+            
+            if is_global_variable or has_auto_flag:
+                properties.append(PropertySignature(
+                    name=name,
+                    type_name=type_name,
+                    flags=flags
+                ))
 
-            logging.debug(f"Property: {type_name} {name} {' '.join(flags)}")
+                logging.debug(f"Property: {type_name} {name} {' '.join(flags)}")
 
         return properties
 

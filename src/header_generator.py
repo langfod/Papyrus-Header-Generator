@@ -7,7 +7,6 @@ Generates Papyrus header files from parsed script data.
 import logging
 import os
 from pathlib import Path
-from typing import List
 
 from .parser import ParsedScript, FunctionSignature, PropertySignature
 
@@ -20,14 +19,11 @@ class HeaderGenerator:
 
     def generate_header(self, pex_file: Path, parsed_data: ParsedScript) -> Path:
         """Generate a header file for the parsed script."""
-        # Create output filename based on script name
         header_filename = f"{parsed_data.script_name}.psc"
         header_path = self.output_dir / header_filename
 
-        # Generate header content
         content = self._generate_header_content(parsed_data)
 
-        # Write header file
         os.makedirs(header_path.parent, exist_ok=True)
         with open(header_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -46,7 +42,7 @@ class HeaderGenerator:
         if parsed_data.flags:
             script_line += f" {' '.join(parsed_data.flags)}"
         lines.append(script_line)
-        lines.append("")  # Empty line
+        lines.append("")
 
         # Properties (if any)
         if parsed_data.properties:
@@ -55,7 +51,7 @@ class HeaderGenerator:
                 if prop.flags:
                     prop_line += f" {' '.join(prop.flags)}"
                 lines.append(prop_line)
-            lines.append("")  # Empty line after properties
+            lines.append("")
 
         # Functions
         if parsed_data.functions:
@@ -66,7 +62,7 @@ class HeaderGenerator:
         # Events
         if parsed_data.events:
             if parsed_data.functions:
-                lines.append("")  # Separator between functions and events
+                lines.append("")
             for event in parsed_data.events:
                 event_line = self._format_event_signature(event)
                 lines.append(event_line)
@@ -91,14 +87,12 @@ class HeaderGenerator:
         else:
             params_str = "()"
 
-        # Native keyword
-        native_str = " native" if func.is_native else ""
+        flags_str = f" {func.flags}" if func.flags else ""
 
-        return f"{' '.join(parts)}{params_str}{native_str}"
+        return f"{' '.join(parts)}{params_str}{flags_str}"
 
     def _format_event_signature(self, event: FunctionSignature) -> str:
         """Format an event signature for the header."""
-        # Parameters
         if event.parameters:
             params_str = f"({', '.join(event.parameters)})"
         else:

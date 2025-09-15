@@ -5,12 +5,10 @@ Handles discovery of .pex files and matching them with their corresponding .psc 
 Supports both loose files and BSA archive files with proper precedence rules.
 """
 
-import glob
 import logging
-import os
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from .bsa_handler import BSAHandler, BSA_AVAILABLE
 
@@ -26,7 +24,7 @@ class FileScanner:
         self.source_search_paths = [
             data_dir / "Source" / "Scripts",
             data_dir / "Scripts" / "Source",
-            data_dir / "Scripts" / "Souce",  # Original typo in requirements
+            data_dir / "Scripts" / "Souce",  # handle some typos
             data_dir / "Scripts"
         ]
         
@@ -57,6 +55,26 @@ class FileScanner:
             except Exception as e:
                 logging.warning(f"Could not clean up temp dir {self.temp_dir}: {e}")
 
+    def find_psc_files(self) -> List[Path]:
+        """Find all .psc source files in the search paths."""
+        psc_files = []
+        found_files = set()
+        
+        for search_path in self.source_search_paths:
+            path = Path(search_path)
+            if not path.exists():
+                continue
+                
+            for psc_file in path.rglob("*.psc"):
+                if psc_file.is_file():
+                    abs_path = psc_file.absolute()
+                    if abs_path not in found_files:
+                        found_files.add(abs_path)
+                        psc_files.append(psc_file)
+                    
+        logging.info(f"Found {len(psc_files)} .psc source files")
+        return psc_files
+
     def find_pex_files(self, pattern: str = "*.pex") -> List[Path]:
         """Find all .pex files matching the pattern in loose files and BSA archives."""
         pex_files = []
@@ -77,7 +95,6 @@ class FileScanner:
         """Find loose .pex files in the scripts directory."""
         pex_files = []
         
-        # Search in the main scripts directory and subdirectories
         for pex_file in self.scripts_dir.rglob(pattern):
             if pex_file.is_file() and pex_file.suffix.lower() == '.pex':
                 pex_files.append(pex_file)
@@ -98,14 +115,12 @@ class FileScanner:
         if not bsa_files:
             return []
 
-        # Scan BSA files for scripts
         self.bsa_scripts = self.bsa_handler.scan_bsa_for_scripts(bsa_files, loose_filenames)
 
         # Extract .pex files that match the pattern
         bsa_pex_files = []
         for filename, file_info in self.bsa_scripts.items():
             if file_info['type'] == 'pex':
-                # Check if filename matches pattern (simple glob matching)
                 if self._matches_pattern(filename, pattern.lower()):
                     # Create a virtual path for BSA files
                     virtual_path = self.scripts_dir / f"[BSA:{file_info['bsa_file'].name}]" / filename
@@ -119,14 +134,34 @@ class FileScanner:
         import fnmatch
         return fnmatch.fnmatch(filename, pattern)
 
+    def find_pex_without_psc(self, psc_files: List[Path], pattern: str = "*.pex") -> List[Path]:
+        """Find .pex files that don't have corresponding .psc source files."""
+        psc_script_names = set()
+        for psc_file in psc_files:
+            psc_script_names.add(psc_file.stem.lower())
+        
+        # Find all .pex files
+        all_pex_files = self.find_pex_files(pattern)
+        
+        # Filter out .pex files that have corresponding .psc files
+        pex_without_psc = []
+        for pex_file in all_pex_files:
+            if "[BSA:" in str(pex_file):
+                pex_name = pex_file.name.lower().replace('.pex', '')
+            else:
+                pex_name = pex_file.stem.lower()
+            
+            if pex_name not in psc_script_names:
+                pex_without_psc.append(pex_file)
+        
+        logging.info(f"Found {len(pex_without_psc)} .pex files without corresponding .psc sources")
+        return pex_without_psc
+
     def find_source_files(self, pex_files: List[Path]) -> Dict[Path, Optional[Path]]:
         """Find corresponding .psc source files for each .pex file."""
         source_matches = {}
         
-        # Build caches for both loose and BSA files
         loose_psc_cache = self._build_loose_psc_cache()
-
-        # If BSA is enabled, we already have BSA scripts from find_pex_files
 
         for pex_file in pex_files:
             source_file = self._find_matching_source(pex_file, loose_psc_cache)
@@ -153,7 +188,6 @@ class FileScanner:
                 
             for psc_file in path.rglob("*.psc"):
                 if psc_file.is_file():
-                    # Use lowercase filename as key for case-insensitive matching
                     key = psc_file.stem.lower()
                     if key not in psc_cache:  # First match wins (precedence)
                         psc_cache[key] = psc_file
@@ -163,9 +197,7 @@ class FileScanner:
     
     def _find_matching_source(self, pex_file: Path, loose_psc_cache: Dict[str, Path]) -> Optional[Path]:
         """Find matching .psc file for a .pex file (loose files first, then BSA)."""
-        # Get the base name without extension (case-insensitive)
         if "[BSA:" in str(pex_file):
-            # Extract actual filename from BSA virtual path
             pex_name = pex_file.name.lower().replace('.pex', '')
         else:
             pex_name = pex_file.stem.lower()
@@ -180,7 +212,6 @@ class FileScanner:
             bsa_psc_name = f"{pex_name}.psc"
             if bsa_psc_name in self.bsa_scripts:
                 file_info = self.bsa_scripts[bsa_psc_name]
-                # Extract to temporary file for processing
                 temp_file = self.bsa_handler.create_temp_file(file_info, self.temp_dir)
                 if temp_file:
                     logging.debug(f"Extracted BSA source: {bsa_psc_name} -> {temp_file}")
@@ -192,10 +223,19 @@ class FileScanner:
         """Get relative path from scripts directory for organizing output."""
         try:
             if "[BSA:" in str(pex_file):
-                # For BSA files, use a simplified path
                 return f"BSA/{pex_file.name}"
             else:
                 return str(pex_file.relative_to(self.scripts_dir))
         except ValueError:
-            # If file is not under scripts_dir, use just the filename
             return pex_file.name
+    
+    def get_relative_psc_path(self, psc_file: Path) -> str:
+        """Get relative path from any source directory for organizing output."""
+        for search_path in self.source_search_paths:
+            try:
+                relative_path = psc_file.relative_to(search_path)
+                return str(relative_path)
+            except ValueError:
+                continue
+        
+        return psc_file.name
