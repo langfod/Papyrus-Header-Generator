@@ -15,6 +15,7 @@ from pathlib import Path
 from src.file_scanner import FileScanner
 from src.parser import PapyrusParser
 from src.header_generator import HeaderGenerator
+from src.decompiler import ChampollionDecompiler
 
 
 def setup_logging(log_file: str = "errors.log"):
@@ -43,6 +44,10 @@ def main():
                        help="File to log missing source files (default: missing_source.txt)")
     parser.add_argument("--enable-bsa", action="store_true", default=False,
                        help="Enable BSA archive scanning (may be slow with many BSA files)")
+    parser.add_argument("--enable-decompile", action="store_true", default=False,
+                       help="Enable decompilation of .pex files using Champollion when no .psc source is found")
+    parser.add_argument("--champollion-path", default=None,
+                       help="Path to Champollion.exe or directory containing it (auto-detected if not specified)")
     parser.add_argument("--verbose", "-v", action="store_true",
                        help="Enable verbose logging")
 
@@ -71,9 +76,24 @@ def main():
     logging.debug(f"Output directory: {args.output_dir}")
     logging.debug(f"Pattern: {args.pattern}")
     logging.debug(f"BSA support: {'enabled' if args.enable_bsa else 'disabled'}")
+    logging.debug(f"Decompilation: {'enabled' if args.enable_decompile else 'disabled'}")
+    if args.enable_decompile and args.champollion_path:
+        logging.debug(f"Champollion path: {args.champollion_path}")
 
     try:
-        scanner = FileScanner(str(scripts_dir), enable_bsa=args.enable_bsa)
+        # Initialize decompiler first to validate Champollion path
+        decompiler = ChampollionDecompiler(
+            champollion_path=args.champollion_path,
+            enable_decompile=args.enable_decompile
+        )
+
+        # Test Champollion if decompilation is enabled
+        if args.enable_decompile:
+            if not decompiler.test_champollion():
+                logging.error("Champollion test failed. Decompilation will be disabled.")
+                sys.exit(1)
+
+        scanner = FileScanner(str(scripts_dir), enable_bsa=args.enable_bsa, decompiler=decompiler)
         parser_instance = PapyrusParser()
         generator = HeaderGenerator(args.output_dir)
 
@@ -93,12 +113,24 @@ def main():
             pattern_desc = f"pattern '{args.pattern}'"
         
         # Create regex for each pattern and combine with OR
-        pattern_regexes = [re.compile(r'\b' + re.escape(pattern) + r'\b', re.IGNORECASE) for pattern in patterns]
+        def create_pattern_regex(pattern):
+            """Create appropriate regex based on pattern type."""
+            if '*' in pattern or '?' in pattern:
+                # Use fnmatch-style pattern for wildcards
+                import fnmatch
+                return lambda name: fnmatch.fnmatch(name.lower(), pattern.lower())
+            else:
+                # Use word boundary matching for literal patterns
+                return lambda name: bool(re.search(r'\b' + re.escape(pattern) + r'\b', name, re.IGNORECASE))
+        
+        pattern_matchers = [create_pattern_regex(pattern) for pattern in patterns]
         
         def matches_any_pattern(filename_or_path):
             """Check if filename or path matches any of the patterns."""
-            return any(regex.search(os.path.basename(str(filename_or_path)).replace('.psc', '')) or 
-                      regex.search(str(filename_or_path)) for regex in pattern_regexes)
+            basename = os.path.basename(str(filename_or_path))
+            # Remove extension for comparison
+            name_without_ext = basename.replace('.psc', '').replace('.pex', '')
+            return any(matcher(basename) or matcher(name_without_ext) for matcher in pattern_matchers)
         
         psc_files = [f for f in scanner.find_psc_files() if matches_any_pattern(f)]
         logging.info(f"Found {len(psc_files)} .psc source files matching {pattern_desc} (case-insensitive, word boundaries)")
@@ -127,7 +159,9 @@ def main():
                 missing_sources.append(str(psc_file))
 
         # Step 2: Find and process .pex files that don't have corresponding .psc files
-        pex_without_psc = scanner.find_pex_without_psc(psc_files, args.pattern)
+        # Create appropriate pattern for .pex file search
+        pex_search_pattern = "*.pex"  # Find all .pex files, then filter by our patterns
+        pex_without_psc = scanner.find_pex_without_psc(psc_files, pex_search_pattern)
         # Filter .pex files by pattern, case-insensitive with word boundary matching
         pex_without_psc = [f for f in pex_without_psc if matches_any_pattern(f)]
         logging.info(f"Found {len(pex_without_psc)} .pex files without .psc sources matching {pattern_desc} (case-insensitive, word boundaries)")

@@ -16,7 +16,7 @@ from .bsa_handler import BSAHandler, BSA_AVAILABLE
 class FileScanner:
     """Scans for .pex files and finds corresponding .psc source files."""
     
-    def __init__(self, scripts_dir: str, enable_bsa: bool = True):
+    def __init__(self, scripts_dir: str, enable_bsa: bool = True, decompiler=None):
         self.scripts_dir = Path(scripts_dir)
         # Update search paths to be relative to the data directory
         data_dir = self.scripts_dir.parent  # Go up from Scripts to Data
@@ -27,6 +27,9 @@ class FileScanner:
             data_dir / "Scripts" / "Souce",  # handle some typos
             data_dir / "Scripts"
         ]
+        
+        # Decompilation support
+        self.decompiler = decompiler
         
         # BSA support
         self.enable_bsa = enable_bsa and BSA_AVAILABLE
@@ -130,9 +133,19 @@ class FileScanner:
         return bsa_pex_files
 
     def _matches_pattern(self, filename: str, pattern: str) -> bool:
-        """Simple pattern matching for BSA files."""
+        """Pattern matching for BSA files - supports both wildcards and literal patterns."""
         import fnmatch
-        return fnmatch.fnmatch(filename, pattern)
+        import re
+        
+        # Remove .pex extension from filename for comparison
+        basename = filename.replace('.pex', '').replace('.psc', '')
+        
+        if '*' in pattern or '?' in pattern:
+            # Use fnmatch for wildcard patterns
+            return fnmatch.fnmatch(filename.lower(), pattern.lower()) or fnmatch.fnmatch(basename.lower(), pattern.lower())
+        else:
+            # Use word boundary matching for literal patterns
+            return bool(re.search(r'\b' + re.escape(pattern) + r'\b', basename, re.IGNORECASE))
 
     def find_pex_without_psc(self, psc_files: List[Path], pattern: str = "*.pex") -> List[Path]:
         """Find .pex files that don't have corresponding .psc source files."""
@@ -196,7 +209,7 @@ class FileScanner:
         return psc_cache
     
     def _find_matching_source(self, pex_file: Path, loose_psc_cache: Dict[str, Path]) -> Optional[Path]:
-        """Find matching .psc file for a .pex file (loose files first, then BSA)."""
+        """Find matching .psc file for a .pex file (loose files first, then BSA, then decompilation)."""
         if "[BSA:" in str(pex_file):
             pex_name = pex_file.name.lower().replace('.pex', '')
         else:
@@ -216,6 +229,33 @@ class FileScanner:
                 if temp_file:
                     logging.debug(f"Extracted BSA source: {bsa_psc_name} -> {temp_file}")
                     return temp_file
+
+        # Finally, try decompilation as a last resort (if enabled and available)
+        if self.decompiler and self.decompiler.is_available():
+            pex_file_to_decompile = None
+            
+            if "[BSA:" not in str(pex_file):
+                # Regular loose .pex file
+                if pex_file.exists():
+                    pex_file_to_decompile = pex_file
+            else:
+                # BSA .pex file - extract it first
+                bsa_pex_name = pex_file.name.lower()
+                if bsa_pex_name in self.bsa_scripts:
+                    file_info = self.bsa_scripts[bsa_pex_name]
+                    temp_pex_file = self.bsa_handler.create_temp_file(file_info, self.temp_dir)
+                    if temp_pex_file:
+                        logging.debug(f"Extracted BSA .pex file: {bsa_pex_name} -> {temp_pex_file}")
+                        pex_file_to_decompile = temp_pex_file
+            
+            if pex_file_to_decompile:
+                logging.debug(f"Attempting to decompile {pex_file.name}")
+                decompiled_source = self.decompiler.decompile_pex(pex_file_to_decompile)
+                if decompiled_source:
+                    logging.info(f"Successfully decompiled {pex_file.name} -> {decompiled_source.name}")
+                    return decompiled_source
+                else:
+                    logging.warning(f"Failed to decompile {pex_file.name}")
 
         return None
 

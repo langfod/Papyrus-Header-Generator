@@ -187,29 +187,31 @@ class BSAHandler:
             # Method 2: Try archive.extract with normalized path (fast)
             if content_bytes is None and hasattr(archive, 'extract'):
                 try:
-                    # Normalize path separators to forward slashes
-                    normalized_path = str(file_path).replace('\\', '/')
-                    content_bytes = archive.extract(normalized_path)
+                    content_bytes = file_record.data
                     if content_bytes:
-                        logging.debug(f"Extracted {file_path} using method 2 (normalized path)")
+                        logging.debug(f"Extracted {file_path} using method 2 (file_record.data)")
                 except Exception as e:
                     logging.debug(f"Method 2 failed for {file_path}: {e}")
 
-            # Method 3: Try with original path format (fast)
-            if content_bytes is None and hasattr(archive, 'extract'):
+            # Method 3: Try opening file record as file-like object
+            if content_bytes is None and hasattr(file_record, 'open'):
                 try:
-                    content_bytes = archive.extract(str(file_path))
+                    with file_record.open() as f:
+                        content_bytes = f.read()
                     if content_bytes:
-                        logging.debug(f"Extracted {file_path} using method 3 (original path)")
+                        logging.debug(f"Extracted {file_path} using method 3 (file_record.open)")
                 except Exception as e:
                     logging.debug(f"Method 3 failed for {file_path}: {e}")
-
 
             if content_bytes is None:
                 logging.debug(f"Could not extract {file_path} from {bsa_file.name}")
                 return None
 
-            # Convert to string (assuming UTF-8 encoding)
+            # For .pex files, return raw bytes instead of trying to decode as text
+            if str(file_path).lower().endswith('.pex'):
+                return content_bytes
+
+            # Convert to string (assuming UTF-8 encoding) for .psc files
             try:
                 content = content_bytes.decode('utf-8')
             except UnicodeDecodeError:
@@ -246,8 +248,14 @@ class BSAHandler:
 
         # Write content to temp file
         try:
-            with open(temp_file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
+            if isinstance(content, bytes):
+                # Binary file (e.g., .pex)
+                with open(temp_file_path, 'wb') as f:
+                    f.write(content)
+            else:
+                # Text file (e.g., .psc)
+                with open(temp_file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
 
             logging.debug(f"Extracted {filename} to {temp_file_path}")
             return temp_file_path

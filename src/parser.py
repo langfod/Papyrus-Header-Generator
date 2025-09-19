@@ -166,10 +166,10 @@ class PapyrusParser:
                     func_declaration += ' ' + lines[i].strip()
 
                 func_data = self._parse_single_function(func_declaration)
-                if func_data and func_data.is_native:
+                if func_data:
                     functions.append(func_data)
-                    logging.debug(f"Function: {func_data.return_type or 'void'} {func_data.name}({', '.join(func_data.parameters)}) native")
-
+                    native_flag = " native" if func_data.is_native else " native"
+                    logging.debug(f"Function: {func_data.return_type or 'void'} {func_data.name}({', '.join(func_data.parameters)}){native_flag}")
             i += 1
 
         return functions
@@ -189,7 +189,9 @@ class PapyrusParser:
         flags_str = match.group(4) or ""
 
         is_native = "native" in flags_str.lower()
-
+        if not is_native:
+            flags_str += " native"  # Ensure native is included if not present
+            
         parameters = self._parse_parameters(params_str) if params_str.strip() else []
 
         return FunctionSignature(
