@@ -157,6 +157,7 @@ class PapyrusParser:
     def _parse_functions(self, content: str) -> List[FunctionSignature]:
         """Parse function declarations using a more robust approach."""
         functions = []
+        seen_functions = set()  # Track function names to avoid duplicates
 
         lines = content.split('\n')
         i = 0
@@ -174,6 +175,18 @@ class PapyrusParser:
 
                 func_data = self._parse_single_function(func_declaration)
                 if func_data:
+                    # Skip property getter/setter functions (named 'get' or 'set')
+                    if func_data.name.lower() in ('get', 'set'):
+                        i += 1
+                        continue
+                    
+                    # Skip duplicate functions
+                    func_key = func_data.name.lower()
+                    if func_key in seen_functions:
+                        i += 1
+                        continue
+                    seen_functions.add(func_key)
+                    
                     functions.append(func_data)
                     native_flag = " native" if func_data.is_native else " native"
                     logging.debug(f"Function: {func_data.return_type or 'void'} {func_data.name}({', '.join(func_data.parameters)}){native_flag}")
