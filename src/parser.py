@@ -29,6 +29,7 @@ class PropertySignature:
     name: str
     type_name: str
     flags: List[str]  # Auto, AutoReadOnly, etc.
+    default_value: Optional[str] = None  # For constants like = 0x00
 
 
 @dataclass
@@ -62,7 +63,13 @@ class PapyrusParser:
         )
 
         self.property_pattern = re.compile(
-            r'^\s*(\w+)\s+Property\s+(\w+)(?:\s*=\s*[^;\r\n]*)?(?:\s+(Auto(?:ReadOnly)?))?\s*$',
+            r'^\s*(\w+(?:\[\])?)\s+Property\s+(\w+)(?:\s*=\s*([^;\r\n]+?))?\s+(Auto(?:ReadOnly)?)\s*$',
+            re.IGNORECASE | re.MULTILINE
+        )
+
+        # Pattern for properties with getter/setter blocks (e.g., "string property CurrentPage" followed by get/set functions)
+        self.property_block_pattern = re.compile(
+            r'^\s*(\w+(?:\[\])?)\s+Property\s+(\w+)\s*$',
             re.IGNORECASE | re.MULTILINE
         )
 
@@ -157,8 +164,8 @@ class PapyrusParser:
         while i < len(lines):
             line = lines[i].strip()
 
-            # Look for function declarations
-            if re.match(r'^\s*(?:\w+\s+)?Function\s+\w+', line, re.IGNORECASE):
+            # Look for function declarations (include array types like string[])
+            if re.match(r'^\s*(?:\w+(?:\[\])?\s+)?Function\s+\w+', line, re.IGNORECASE):
                 func_declaration = line
 
                 while i + 1 < len(lines) and not re.search(r'\)', func_declaration):
@@ -177,7 +184,8 @@ class PapyrusParser:
     def _parse_single_function(self, declaration: str) -> Optional[FunctionSignature]:
         """Parse a single function declaration."""
         # Pattern to match function declaration
-        pattern = r'^\s*(?:(\w+)\s+)?Function\s+(\w+)\s*\((.*?)\)(?:\s+([\w\s]+))?\s*$'
+        # Return type can include array brackets like string[] or Actor[]
+        pattern = r'^\s*(?:(\w+(?:\[\])?)\s+)?Function\s+(\w+)\s*\((.*?)\)(?:\s+([\w\s]+))?\s*$'
         match = re.match(pattern, declaration, re.IGNORECASE | re.DOTALL)
 
         if not match:
@@ -252,13 +260,16 @@ class PapyrusParser:
         )
 
     def _parse_properties(self, content: str) -> List[PropertySignature]:
-        """Parse property declarations - only include Auto properties and GlobalVariable properties."""
+        """Parse property declarations - include Auto properties, GlobalVariable properties, and properties with getter/setter blocks."""
         properties = []
+        found_property_names = set()
 
+        # First, find auto/autoreadonly properties
         for match in self.property_pattern.finditer(content):
             type_name = match.group(1)
             name = match.group(2)
-            flags = [match.group(3)] if match.group(3) else []
+            default_value = match.group(3).strip() if match.group(3) else None
+            flags = [match.group(4)] if match.group(4) else []
 
             # Only include properties that are:
             # 1. GlobalVariable type, OR
@@ -270,10 +281,30 @@ class PapyrusParser:
                 properties.append(PropertySignature(
                     name=name,
                     type_name=type_name,
-                    flags=flags
+                    flags=flags,
+                    default_value=default_value
                 ))
+                found_property_names.add(name.lower())
+                logging.debug(f"Property: {type_name} {name} = {default_value} {' '.join(flags)}")
 
-                logging.debug(f"Property: {type_name} {name} {' '.join(flags)}")
+        # Second, find properties with getter/setter blocks (no auto/autoreadonly keyword)
+        for match in self.property_block_pattern.finditer(content):
+            type_name = match.group(1)
+            name = match.group(2)
+            
+            # Skip if we already found this property with auto flag
+            if name.lower() in found_property_names:
+                continue
+            
+            # For block properties, we'll make them auto (read-only would require checking for setter)
+            properties.append(PropertySignature(
+                name=name,
+                type_name=type_name,
+                flags=["auto"],
+                default_value=None
+            ))
+            found_property_names.add(name.lower())
+            logging.debug(f"Property (block): {type_name} {name} auto")
 
         return properties
 

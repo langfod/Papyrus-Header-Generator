@@ -9,14 +9,13 @@ import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set
-from io import BytesIO
 
 try:
-    from bethesda_structs.archive import BSAArchive
+    from sse_bsa import BSAArchive
     BSA_AVAILABLE = True
 except ImportError:
     BSA_AVAILABLE = False
-    logging.warning("bethesda_structs not available - BSA support disabled")
+    logging.warning("sse_bsa not available - BSA support disabled")
 
 
 class BSAHandler:
@@ -24,11 +23,11 @@ class BSAHandler:
 
     def __init__(self, data_dir: Path):
         self.data_dir = Path(data_dir)
-        self.bsa_cache = {}  # Cache for BSA archive objects
+        self.bsa_cache: Dict[str, BSAArchive] = {}  # Cache for BSA archive objects
         self.bsa_scripts = {}  # Cache for BSA script files
 
         if not BSA_AVAILABLE:
-            raise ImportError("bethesda_structs module required for BSA support")
+            raise ImportError("sse_bsa module required for BSA support")
 
     def find_bsa_files(self) -> List[Path]:
         """Find all BSA files in the data directory."""
@@ -79,38 +78,18 @@ class BSAHandler:
         """Scan a single BSA file for script files."""
         script_files = {}
 
-        if not BSAArchive.can_handle(str(bsa_file)):
-            logging.warning(f"Cannot handle BSA format: {bsa_file}")
-            return script_files
-
         try:
-            archive = BSAArchive.parse_file(str(bsa_file))
+            archive = self._get_cached_archive(bsa_file)
+            if archive is None:
+                return script_files
 
-            for file_record in archive.iter_files():
-                # Get the file path within the BSA - try different possible attributes
-                file_path = None
-                if hasattr(file_record, 'name'):
-                    file_path = file_record.name
-                elif hasattr(file_record, 'filepath'):
-                    file_path = file_record.filepath
-                elif hasattr(file_record, 'path'):
-                    file_path = file_record.path
-                else:
-                    # If we can't get the path, try to extract it from the record
-                    try:
-                        file_path = str(file_record)
-                    except:
-                        logging.debug(f"Could not determine file path for record: {file_record}")
-                        continue
-
-                if not file_path:
-                    continue
-
-                # Convert file_path to string if it's a Path object
+            for file_path in archive.files:
+                # Ensure file_path is a string
                 file_path_str = str(file_path)
-
+                
                 # Check if it's a script file
-                if not (file_path_str.lower().endswith('.pex') or file_path_str.lower().endswith('.psc')):
+                file_path_lower = file_path_str.lower()
+                if not (file_path_lower.endswith('.pex') or file_path_lower.endswith('.psc')):
                     continue
 
                 # Extract just the filename for comparison
@@ -121,15 +100,13 @@ class BSAHandler:
                     logging.debug(f"Skipping BSA file {filename} - loose file takes precedence")
                     continue
 
-                # Determine file type and expected location
+                # Determine file type
                 file_type = 'pex' if filename.endswith('.pex') else 'psc'
 
                 script_files[filename] = {
-                    'path': file_path,
+                    'path': file_path_str,
                     'type': file_type,
                     'bsa_file': bsa_file,
-                    'file_record': file_record,
-                    'archive': None  # Will be loaded on demand
                 }
 
                 logging.debug(f"Found {file_type}: {filename} in {bsa_file.name}")
@@ -139,12 +116,12 @@ class BSAHandler:
 
         return script_files
 
-    def _get_cached_archive(self, bsa_file: Path):
+    def _get_cached_archive(self, bsa_file: Path) -> Optional[BSAArchive]:
         """Get a cached BSA archive object or create one if not cached."""
         bsa_path_str = str(bsa_file)
         if bsa_path_str not in self.bsa_cache:
             try:
-                archive = BSAArchive.parse_file(bsa_path_str)
+                archive = BSAArchive(bsa_file)
                 self.bsa_cache[bsa_path_str] = archive
                 logging.debug(f"Cached BSA archive: {bsa_file.name}")
             except Exception as e:
@@ -152,7 +129,7 @@ class BSAHandler:
                 return None
         return self.bsa_cache.get(bsa_path_str)
 
-    def extract_file_content(self, file_info: Dict) -> Optional[str]:
+    def extract_file_content(self, file_info: Dict) -> Optional[bytes | str]:
         """
         Extract file content from BSA archive using cached archive objects.
 
@@ -160,54 +137,25 @@ class BSAHandler:
             file_info: File info dict from scan_bsa_for_scripts
 
         Returns:
-            String content of the file, or None if extraction fails
+            Bytes for .pex files, string for .psc files, or None if extraction fails
         """
         try:
             bsa_file = file_info['bsa_file']
             file_path = file_info['path']
-            file_record = file_info['file_record']
 
-            # Use cached archive instead of re-parsing every time
+            # Use cached archive
             archive = self._get_cached_archive(bsa_file)
             if archive is None:
                 return None
 
-            # Try different extraction approaches - but limit expensive operations
-            content_bytes = None
-
-            # Method 1: Try using file record directly (fastest)
-            if hasattr(file_record, 'extract'):
-                try:
-                    content_bytes = file_record.extract()
-                    if content_bytes:
-                        logging.debug(f"Extracted {file_path} using method 1 (file_record.extract)")
-                except Exception as e:
-                    logging.debug(f"Method 1 failed for {file_path}: {e}")
-
-            # Method 2: Try archive.extract with normalized path (fast)
-            if content_bytes is None and hasattr(archive, 'extract'):
-                try:
-                    content_bytes = file_record.data
-                    if content_bytes:
-                        logging.debug(f"Extracted {file_path} using method 2 (file_record.data)")
-                except Exception as e:
-                    logging.debug(f"Method 2 failed for {file_path}: {e}")
-
-            # Method 3: Try opening file record as file-like object
-            if content_bytes is None and hasattr(file_record, 'open'):
-                try:
-                    with file_record.open() as f:
-                        content_bytes = f.read()
-                    if content_bytes:
-                        logging.debug(f"Extracted {file_path} using method 3 (file_record.open)")
-                except Exception as e:
-                    logging.debug(f"Method 3 failed for {file_path}: {e}")
+            # Get file content as bytes using get_file_stream
+            content_bytes = archive.get_file_stream(file_path).read()
 
             if content_bytes is None:
                 logging.debug(f"Could not extract {file_path} from {bsa_file.name}")
                 return None
 
-            # For .pex files, return raw bytes instead of trying to decode as text
+            # For .pex files, return raw bytes
             if str(file_path).lower().endswith('.pex'):
                 return content_bytes
 

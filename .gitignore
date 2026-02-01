@@ -218,3 +218,5 @@ __marimo__/
 Headers/
 Data/
 missing_source.txt
+/examples/compiled
+/output

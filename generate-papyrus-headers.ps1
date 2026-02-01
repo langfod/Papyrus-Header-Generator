@@ -46,7 +46,7 @@ param(
 
 # Set up script variables
 $ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$HeaderGenerator = Join-Path $ScriptPath "papyrus_header_generator.exe"
+$HeaderGenerator = Join-Path $ScriptPath "papyrus_header_generator.py"
 $BuiltInTypes = @("Bool", "Float", "Int", "String")
 
 # Logging function
@@ -245,7 +245,7 @@ function GenerateHeaders {
         }
     }
     
-    $command = "`"$HeaderGenerator`" " + ($cmdArgs -join " ")
+    $command = "python `"$HeaderGenerator`" " + ($cmdArgs -join " ")
     
     if ($DryRun) {
         Write-Log "[DRY RUN] Would execute: $command"
@@ -260,16 +260,8 @@ function GenerateHeaders {
             }
         }
         try {
-            # Build argument list for call operator
-            $execArgs = @("--verbose", "--enable-bsa", "--base-dir", $BaseDir, "--output-dir", $OutputDir, "--patternlist", $patternList)
-            if ($EnableDecompile) {
-                $execArgs += "--enable-decompile"
-                if ($ChampollionPath) {
-                    $execArgs += "--champollion-path"
-                    $execArgs += $ChampollionPath
-                }
-            }
-            $result = & "$HeaderGenerator" @execArgs 2>&1
+            # Use Invoke-Expression to properly handle the quoted arguments
+            $result = Invoke-Expression "python `"$HeaderGenerator`" $($cmdArgs -join ' ')" 2>&1
             if ($LASTEXITCODE -eq 0) {
                 Write-Log "SUCCESS: Generated headers for all patterns in batch"
             } else {

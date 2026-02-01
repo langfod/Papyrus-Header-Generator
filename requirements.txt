@@ -1,2 +1,2 @@
-bethesda-structs
+sse-bsa
 pyinstaller

@@ -48,6 +48,8 @@ class HeaderGenerator:
         if parsed_data.properties:
             for prop in parsed_data.properties:
                 prop_line = f"{prop.type_name} Property {prop.name}"
+                if prop.default_value:
+                    prop_line += f" = {prop.default_value}"
                 if prop.flags:
                     prop_line += f" {' '.join(prop.flags)}"
                 lines.append(prop_line)
